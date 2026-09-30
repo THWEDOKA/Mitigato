@@ -1,0 +1,31 @@
+# Copy to /etc/mitigato/config.toml and set permissions to 0600.
+# Set at least one alert channel. Do not commit real tokens or passwords.
+[monitor]
+interface = "auto"
+interval_seconds = 5
+alert_after_samples = 3
+recover_after_samples = 3
+alert_cooldown_seconds = 300
+packets_per_second = 10000
+bits_per_second = 100000000
+syn_recv_total = 500
+syn_recv_per_ip = 100
+
+[firewall]
+enabled = true
+block_seconds = 600
+max_blocks_per_cycle = 20
+trusted_ips = [] # Add your management IP/CIDR here, for example "203.0.113.5/32".
+
+[smtp]
+host = ""
+port = 465
+security = "ssl" # Or "starttls" (usually port 587).
+user = ""
+password = ""
+from = ""
+to = ""
+
+[telegram]
+bot_token = ""
+chat_id = ""

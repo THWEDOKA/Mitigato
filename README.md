@@ -4,68 +4,93 @@
 
 # Mitigato
 
-**Spot a DDoS attack early. Get alerted. Apply a first line of defense.**
+**Monitor traffic. Catch suspicious spikes. Alert your team. Temporarily block abusive sources.**
 
-An upcoming server-side tool for quick setup, traffic monitoring, DDoS alerts, and basic firewall protection.
+A lightweight Linux DDoS monitor with SMTP and Telegram notifications and basic nftables protection.
 
 [**English**](README.md) · [Русский](README.ru.md)
 
-![Project status: early development](https://img.shields.io/badge/status-early%20development-153347?style=flat-square&labelColor=0d1a27&color=30bfa9)
-![License: not chosen yet](https://img.shields.io/badge/license-to%20be%20decided-153347?style=flat-square&labelColor=0d1a27&color=30bfa9)
+[![License: MIT](https://img.shields.io/badge/license-MIT-30bfa9?style=flat-square&labelColor=0d1a27)](LICENSE)
+[![CI](https://github.com/THWEDOKA/Mitigato/actions/workflows/ci.yml/badge.svg)](https://github.com/THWEDOKA/Mitigato/actions/workflows/ci.yml)
+![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-30bfa9?style=flat-square&labelColor=0d1a27)
+![Platform: Linux + systemd](https://img.shields.io/badge/platform-Linux%20%2B%20systemd-30bfa9?style=flat-square&labelColor=0d1a27)
 
 </div>
 
 ---
 
-## The idea
+## What it does
 
-Install Mitigato on a server, finish a short setup, and keep an eye on its traffic. When the monitoring rules detect a possible DDoS attack, Mitigato will send an alert through your configured SMTP server and Telegram bot. Basic firewall rules will provide an initial layer of server protection.
+Mitigato samples inbound packet and bit rates from `/proc/net/dev`, and counts half-open TCP connections (`SYN_RECV`) from `/proc/net/tcp` and `/proc/net/tcp6`. It alerts after a configurable number of consecutive samples over a threshold, sends a recovery notice, and limits repeat alerts with a cooldown.
+
+When a **public** source IP exceeds the per-IP `SYN_RECV` threshold, Mitigato can add it to a temporary nftables block set. Trusted addresses and private addresses are never blocked automatically. Mitigato owns only its dedicated `inet mitigato` table; it does not change your existing firewall policy.
 
 <div align="center">
-<img src="assets/mitigato-signal.gif" alt="Animated traffic signal" width="520" />
+<img src="assets/mitigato-signal.gif" alt="Animated monitoring signal" width="520" />
 </div>
-
-| Planned capability | What it is for |
-| :--- | :--- |
-| ⚡ **Fast setup** | Install on a server and complete the initial configuration in a few steps. |
-| 📈 **Traffic monitoring** | Watch for traffic patterns that may indicate a DDoS attack. |
-| ✉️ **SMTP alerts** | Send attack notifications to a configured email destination. |
-| 🤖 **Telegram alerts** | Notify operators through a configured Telegram bot. |
-| 🛡️ **Firewall basics** | Apply basic server-side firewall protection. |
-
-## Intended flow
 
 ```mermaid
 flowchart LR
-    A[Server traffic] --> B[Mitigato monitoring]
-    B --> C{Possible attack?}
+    A[Inbound traffic] --> B[Rate and SYN_RECV sampling]
+    B --> C{Threshold exceeded?}
+    C -- Yes, consecutive samples --> D[SMTP / Telegram alert]
     C -- No --> B
-    C -- Yes --> D[Alert]
-    D --> E[SMTP email]
-    D --> F[Telegram bot]
-    B --> G[Basic firewall protection]
+    B --> E{Public source exceeds per-IP limit?}
+    E -- Yes --> F[Temporary nftables block]
 ```
 
-## Project status
+## Quick install
 
-Mitigato is at the **early development** stage. This repository does not yet contain an installable release. The capabilities above describe the product direction, not shipped functionality. Installation commands and configuration examples will be added when an implementation is available.
+**Requirements:** Linux with systemd, Python 3.11 or newer, and root access. The installer installs `nftables` through `apt`, `dnf`, or `pacman` if it is missing.
 
-### Roadmap
+```bash
+git clone https://github.com/THWEDOKA/Mitigato.git
+cd Mitigato
+sudo bash install.sh
+```
 
-- [ ] Server installation and short setup flow
-- [ ] Traffic monitoring and attack detection rules
-- [ ] SMTP and Telegram alert delivery
-- [ ] Basic firewall protection
-- [ ] Installation, configuration, and operation guides
+The setup asks for SMTP and/or Telegram credentials and optional trusted management IPs. At least one notification channel is required. Credentials are stored in `/etc/mitigato/config.toml` with mode `0600`. The systemd service starts automatically.
 
-## Follow the project
+```bash
+sudo mitigato check                    # Validate configuration and interface
+sudo mitigato test-alert               # Send a real test notification
+systemctl status mitigato.service      # Check service health
+journalctl -u mitigato.service -f      # Follow detections and errors
+```
 
-Watch this repository for development updates. If you have a use case or a feature request, [open an issue](https://github.com/THWEDOKA/Mitigato/issues).
+For Telegram, create a bot with [BotFather](https://t.me/BotFather), start a chat with it, and use that chat's ID. For SMTP, use a mail provider's TLS/SSL endpoint and an app password when required by the provider.
 
-<div align="center">
+## Configuration
 
----
+Edit `/etc/mitigato/config.toml`, then run `sudo systemctl restart mitigato.service`. See [config.example.toml](config.example.toml) for every setting.
 
-**Mitigato** · Made to make server protection easier to start.
+| Setting | Default | Meaning |
+| :--- | ---: | :--- |
+| `monitor.interval_seconds` | `5` | Time between samples. |
+| `monitor.packets_per_second` | `10000` | Inbound packet-rate alert threshold. |
+| `monitor.bits_per_second` | `100000000` | Inbound bit-rate alert threshold (100 Mbit/s). |
+| `monitor.syn_recv_total` | `500` | Total half-open TCP connection threshold. |
+| `monitor.syn_recv_per_ip` | `100` | Per-source threshold; also triggers a temporary block. |
+| `monitor.alert_after_samples` | `3` | Consecutive high samples before the first alert. |
+| `firewall.block_seconds` | `600` | Block duration (10 minutes). |
+| `firewall.trusted_ips` | `[]` | IPs/CIDRs excluded from automatic blocking. |
 
-</div>
+Set thresholds for **your** normal traffic. Start by watching the logs and using `firewall.enabled = false` if you want alerts without blocking. The default thresholds are starting values, not universal attack signatures.
+
+## Operations
+
+```bash
+sudo mitigato run --once --no-firewall  # Inspect one sample without changing nftables
+sudo nft list table inet mitigato       # Inspect active block sets
+sudo systemctl stop mitigato.service    # Stop monitoring and remove its nftables table
+sudo mitigato uninstall                 # Remove service and program; keep configuration
+sudo mitigato uninstall --purge         # Also delete configuration and secrets
+```
+
+Mitigato is a **basic host-side signal and response tool**. It does not inspect application requests, distinguish every legitimate spike from an attack, or replace upstream DDoS mitigation. Automatic blocking is limited to public IPs with many `SYN_RECV` sockets; packet/bit-rate alerts alone do not block traffic.
+
+## Development
+
+Run the test suite with `python3 -m unittest discover -s tests -v`. The project uses only Python's standard library at runtime. Bug reports and ideas are welcome in [Issues](https://github.com/THWEDOKA/Mitigato/issues).
+
+Licensed under [MIT](LICENSE).
